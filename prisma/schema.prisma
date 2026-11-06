@@ -1,0 +1,210 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  CREATOR
+  REVIEWER
+  BRAND_OWNER
+  ADMIN
+}
+
+enum ReviewStatus {
+  DRAFT
+  SUBMITTED
+  PENDING_APPROVAL
+  APPROVED
+  REJECTED
+}
+
+enum FindingStatus {
+  OPEN
+  ACCEPTED
+  EDITED
+  WAIVED
+  ESCALATED
+}
+
+enum Severity {
+  ADVISORY
+  MINOR
+  MAJOR
+  BLOCK
+}
+
+enum Verdict {
+  SUPPORTED
+  UNSUPPORTED
+  CONTRADICTED
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String?
+  passwordHash  String
+  role          Role      @default(CREATOR)
+  brand         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  reviewRequests ReviewRequest[] @relation("SubmittedReviews")
+  reviewedReviews ReviewRequest[] @relation("ReviewedReviews")
+  decisions       DecisionLog[]
+  findings        Finding[]
+  signatures      Signature[]
+  contracts       BrandContract[]
+}
+
+model BrandContract {
+  id          String   @id @default(cuid())
+  name        String
+  brand       String
+  version     Int      @default(1)
+  status      String   @default("draft") // draft | approved | archived
+  ownerId     String  
+  owner       User     @relation(fields: [ownerId], references: [id])
+  rules       Rule[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([ownerId])
+  @@index([brand, version])
+}
+
+model Rule {
+  id          String   @id @default(cuid())
+  contractId  String  
+  contract    BrandContract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  ruleId      String   // e.g. FACT-NUM-04
+  family      String   // claims.numeric | terminology | accessibility | dates | tone | visual
+  statement   String
+  scope       Json     // { brand, markets[], channels[] }
+  severity    Severity @default(MAJOR)
+  mode        String   // deterministic | grounded | judged
+  isBlocking  Boolean  @default(false)
+  sourceDoc   String?
+  sourcePage  Int?
+  sourceQuote String?
+  owner       String?
+  approvedAt  DateTime?
+  version     Int      @default(1)
+  exceptions  Json?    // array of exception strings
+  findings    Finding[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([contractId])
+  @@index([ruleId])
+  @@index([family])
+}
+
+model FactLedger {
+  id          String   @id @default(cuid())
+  key         String   // e.g. METRIC-CUSTOMERS
+  value       String   // current approved value
+  owner       String?
+  source      String?
+  verifiedAt  DateTime?
+  expiresAt   DateTime? // validity window end
+  successorId String?   // link to superseding entry
+  brand       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([key])
+  @@index([brand])
+}
+
+model ReviewRequest {
+  id          String   @id @default(cuid())
+  title       String
+  channel     String?
+  market      String?
+  campaign    String?
+  status      ReviewStatus @default(DRAFT)
+  assetUrl    String?
+  submittedById String
+  submittedBy User     @relation("SubmittedReviews", fields: [submittedById], references: [id])
+  reviewedById String? 
+  reviewedBy  User?    @relation("ReviewedReviews", fields: [reviewedById], references: [id])
+  submittedAt DateTime @default(now())
+  reviewedAt  DateTime?
+  content     String?   @db.Text
+  findings    Finding[]
+  decisions   DecisionLog[] @relation("ReviewDecisions")
+
+  @@index([submittedById])
+  @@index([status])
+}
+
+model Finding {
+  id              String   @id @default(cuid())
+  reviewId        String  
+  review          ReviewRequest @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  ruleId          String?   // ref to Rule.ruleId (denormalized for citation integrity)
+  rule            Rule?     @relation(fields: [ruleId], references: [id])
+  family          String
+  verdict         Verdict?
+  severity        Severity @default(ADVISORY)
+  confidence      Float?
+  spanText        String?
+  spanStart       Int?
+  spanEnd         Int?
+  sourcePage      Int?
+  evidenceRecord  String?
+  suggestedFix    String?
+  intentAnchor    String?
+  status          FindingStatus @default(OPEN)
+  waiverReason    String?
+  waiverExpiresAt DateTime?
+  decidedById     String? 
+  decidedBy       User?    @relation(fields: [decidedById], references: [id])
+  decidedAt       DateTime?
+  createdAt       DateTime @default(now())
+  decisionLogs    DecisionLog[] @relation("FindingDecisions")
+
+  @@index([reviewId])
+  @@index([ruleId])
+  @@index([status])
+}
+
+model DecisionLog {
+  id          String   @id @default(cuid())
+  actorId     String  
+  actor       User     @relation(fields: [actorId], references: [id])
+  action      String   // accept | edit | waive | escalate | approve | reject | compile_rule
+  entityType  String   // finding | review | rule | contract
+  entityId    String?
+  ruleVersion String?
+  modelVersion String?
+  promptHash  String?
+  timestamp   DateTime @default(now())
+  details     Json?
+  reviewId    String? 
+  findingId   String? 
+  review      ReviewRequest? @relation("ReviewDecisions", fields: [reviewId], references: [id])
+  finding     Finding?     @relation("FindingDecisions", fields: [findingId], references: [id])
+
+  @@index([actorId])
+  @@index([timestamp])
+  @@index([reviewId])
+}
+
+model Signature {
+  id          String   @id @default(cuid())
+  userId      String  
+  user        User     @relation(fields: [userId], references: [id])
+  fileUrl     String
+  fileName    String
+  mimeType    String
+  uploadedAt  DateTime @default(now())
+
+  @@index([userId])
+}
